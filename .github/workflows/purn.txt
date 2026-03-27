@@ -1,0 +1,232 @@
+import os
+import sys
+import time
+import random
+import requests
+from colorama import Fore, Style, init
+
+init(autoreset=True)
+
+R = Fore.RED
+G = Fore.GREEN
+C = Fore.CYAN
+Y = Fore.YELLOW
+W = Fore.WHITE
+F = Fore.RESET
+
+class ZahmadChecker:
+    def __init__(self):
+        self.approved = 0
+        self.declined = 0
+
+    def print_banner(self):
+        banner = f"""{C}
+███████╗ █████╗  ██╗  ██╗ ███╗   ███╗ █████╗  ██████╗ 
+╚══███╔╝██╔══██╗ ██║  ██║ ████╗ ████║██╔══██╗ ██╔══██╗
+  ███╔╝ ███████║ ███████║ ██╔████╔██║███████║ ██║  ██║
+ ███╔╝  ██╔══██║ ██╔══██║ ██║╚██╔╝██║██╔══██║ ██║  ██║
+███████╗██║  ██║ ██║  ██║ ██║ ╚═╝ ██║██║  ██║ ██████╔╝
+╚══════╝╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ 
+        {G}ZAHMAD CC CHECKER V0.2
+"""
+        print(banner)
+        print(f"{R}======================================================================")
+        print()
+
+    def get_bin_info(self, card_number):
+        bin_code = card_number[:6]
+        
+        if hasattr(self, 'bin_cache') and bin_code in self.bin_cache:
+            return self.bin_cache[bin_code]
+            
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json"
+            }
+            response = requests.get(f"https://data.handyapi.com/bin/{bin_code}", headers=headers, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('Status') == 'SUCCESS':
+                    bank = data.get('Issuer', 'Unknown Bank')
+                    card_type = data.get('Type', 'Unknown').capitalize()
+                    brand = data.get('Scheme', 'Unknown').upper()
+                    
+                    result = {
+                        "bank": bank,
+                        "type": card_type,
+                        "brand": brand
+                    }
+                    
+                    if not hasattr(self, 'bin_cache'):
+                        self.bin_cache = {}
+                    self.bin_cache[bin_code] = result
+                    
+                    return result
+        except:
+            pass
+        
+        result = {
+            "bank": "Unknown Bank",
+            "type": "Unknown",
+            "brand": self.get_card_brand(card_number)
+        }
+        
+        if not hasattr(self, 'bin_cache'):
+            self.bin_cache = {}
+        self.bin_cache[bin_code] = result
+        
+        return result
+
+    def get_card_brand(self, card_number):
+        if card_number.startswith('4'):
+            return "VISA"
+        elif card_number[:2] in ['51', '52', '53', '54', '55'] or (2221 <= int(card_number[:4]) <= 2720):
+            return "MASTERCARD"
+        elif card_number.startswith('34') or card_number.startswith('37'):
+            return "AMEX"
+        elif card_number.startswith('6011') or card_number.startswith('65'):
+            return "DISCOVER"
+        elif card_number.startswith('35'):
+            return "JCB"
+        else:
+            return "UNKNOWN"
+
+    def stripe_validate_number(self, card_number):
+        if not card_number or not card_number.isdigit():
+            return False
+            
+        total = 0
+        reverse_digits = card_number[::-1]
+        for i, digit in enumerate(reverse_digits):
+            n = int(digit)
+            if i % 2 == 1:
+                n *= 2
+                if n > 9:
+                    n -= 9
+            total += n
+            
+        if total % 10 != 0:
+            return False
+            
+        length = len(card_number)
+        
+        if card_number.startswith('4'):
+            return length in [13, 16, 19]
+            
+        elif card_number[:2] in ['51', '52', '53', '54', '55'] or (len(card_number) >= 4 and 2221 <= int(card_number[:4]) <= 2720):
+            return length == 16
+            
+        elif card_number.startswith('34') or card_number.startswith('37'):
+            return length == 15
+
+        elif card_number.startswith('6011') or card_number.startswith('65') or (len(card_number) >= 3 and 644 <= int(card_number[:3]) <= 649):
+            return length in [16, 17, 18, 19]
+
+        elif card_number.startswith('36') or card_number.startswith('38') or card_number.startswith('30'):
+            return length == 14
+
+        elif len(card_number) >= 4 and 3528 <= int(card_number[:4]) <= 3589:
+            return length in [16, 17, 18, 19]
+
+        return 14 <= length <= 19
+
+    def check_card(self, card_line):
+        parts = card_line.split('|')
+        card_number = parts[0].strip()
+        
+        bin_info = self.get_bin_info(card_number)
+
+        if not self.stripe_validate_number(card_number):
+            return "FAIL", "Declined", bin_info
+            
+        return "APPROVED", "", bin_info
+
+    def run(self, filename):
+        if os.path.isdir(filename):
+            filename = os.path.join(filename, "cc.txt")
+            print(f"{Y}[!] Folder detected using: {filename}\n")
+        
+        if not os.path.exists(filename):
+            print(f"{R}[!] File not found: {filename}")
+            print(f"{Y}[!] Please make sure 'cc.txt' exists!")
+            return
+
+        if not os.path.isfile(filename):
+            print(f"{R}[!] Invalid file path!")
+            return
+
+        with open(filename, 'r', encoding='utf-8', errors='ignore') as f:
+            cards = [line.strip() for line in f if line.strip()]
+
+        approved_path = os.path.join(get_executable_dir(), "approved.txt")
+        
+        print(f"{G}[+] Loaded {len(cards)} lines from {os.path.basename(filename)}")
+        print(f"{C}[+] Approved cards will be saved to: {os.path.basename(approved_path)}")
+        print(f"{Y}[*] Starting checks...")
+        print()
+
+        for card in cards:
+            timestamp = time.strftime("[%H:%M:%S]")
+            
+            result, status, bin_info = self.check_card(card)
+            
+            if result == "APPROVED":
+                bin_text = f"{bin_info['brand']} {bin_info['type']} - {bin_info['bank']}"
+                status_text = f" ({status})" if status else ""
+                print(f"{G}{timestamp} {card} -> {result} ✓{status_text}")
+                print(f"{C}         └─ {bin_text}")
+                self.approved += 1
+                
+                approved_path = os.path.join(get_executable_dir(), "approved.txt")
+                with open(approved_path, "a", encoding='utf-8') as f:
+                    f.write(f"{card} | {bin_text}\n")
+            elif result == "FAIL":
+                bin_text = f"{bin_info['brand']} - {bin_info['bank']}"
+                status_text = f" ({status})" if status else ""
+                print(f"{R}{timestamp} {card} -> {result} ✖{status_text} [{bin_text}]")
+                self.declined += 1
+            
+            time.sleep(1)
+
+        print()
+        print(f"{Y}{'=' * 70}")
+        print(f"{C}TOTAL: {len(cards)} | {G}APPROVED: {self.approved} | {R}DECLINED: {self.declined}")
+        print(f"{Y}{'=' * 70}")
+
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+def get_executable_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+if __name__ == "__main__":
+    from multiprocessing import freeze_support
+    freeze_support()
+    
+    os.system('cls' if os.name == 'nt' else 'clear')
+    os.system('color')
+    
+    checker = ZahmadChecker()
+    checker.print_banner()
+    
+    path = input(f"{G}Enter path to CC list file: ").strip()
+    if not path:
+        path = "cc.txt"
+    
+    path = path.strip('"').strip("'")
+    
+    if not os.path.isabs(path):
+        path = os.path.join(get_executable_dir(), path)
+    
+    print()
+    checker.run(path)
+    
+    print()
+    input(f"{C}Press Enter to exit...")
